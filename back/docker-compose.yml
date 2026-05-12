@@ -1,0 +1,58 @@
+version: "3.9"
+
+services:
+  db:
+    image: mongo:7
+    container_name: mongo-db
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: adminpassword
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - backend
+
+  sso:
+    image: quay.io/keycloak/keycloak:25.0
+    container_name: keycloak-sso
+    command: start-dev
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: adminpassword
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+    networks:
+      - backend
+
+  api:
+    build:
+      context: ./api
+    container_name: flask-api
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      MONGO_URI: mongodb://admin:adminpassword@db:27017
+      KEYCLOAK_SERVER_URL: http://sso:8080
+      KEYCLOAK_REALM: mednow
+      KEYCLOAK_CLIENT_ID: mednow-api
+    depends_on:
+      - db
+      - sso
+    volumes:
+      - ./api:/app
+    networks:
+      - backend
+
+volumes:
+  mongo_data:
+  keycloak_data:
+
+networks:
+  backend:
