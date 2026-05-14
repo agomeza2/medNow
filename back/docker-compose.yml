@@ -1,58 +1,52 @@
-version: "3.9"
-
 services:
-  db:
+  mongo:
     image: mongo:7
-    container_name: mongo-db
-    restart: unless-stopped
     ports:
       - "27017:27017"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: adminpassword
     volumes:
       - mongo_data:/data/db
-    networks:
-      - backend
-
-  sso:
-    image: quay.io/keycloak/keycloak:25.0
-    container_name: keycloak-sso
+  postgres:
+    image: postgres:16
+    env_file:
+      - .env 
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - keycloak_data:/var/lib/postgresql/data
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0.0
     command: start-dev
-    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres
+      KC_DB_URL_DATABASE: ${POSTGRES_DB}
+      KC_DB_USERNAME: ${POSTGRES_USER}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+
     ports:
       - "8080:8080"
-    environment:
-      KEYCLOAK_ADMIN: admin
-      KEYCLOAK_ADMIN_PASSWORD: adminpassword
-    volumes:
-      - keycloak_data:/opt/keycloak/data
-    networks:
-      - backend
 
+    depends_on:
+      - postgres
   api:
-    build:
-      context: ./api
-    container_name: flask-api
-    restart: unless-stopped
+    build: ./api
     ports:
       - "5000:5000"
-    environment:
-      MONGO_URI: mongodb://admin:adminpassword@db:27017
-      KEYCLOAK_SERVER_URL: http://sso:8080
-      KEYCLOAK_REALM: mednow
-      KEYCLOAK_CLIENT_ID: mednow-api
-    depends_on:
-      - db
-      - sso
+    env_file:
+      - ./api/.env
     volumes:
-      - ./api:/app
-    networks:
-      - backend
+      - ./uploads:/app/uploads
+    depends_on:
+      - mongo
+      - keycloak
 
 volumes:
   mongo_data:
   keycloak_data:
-
-networks:
-  backend:
