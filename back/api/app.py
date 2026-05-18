@@ -1,268 +1,293 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from pymongo import MongoClient
-from keycloak import KeycloakOpenID
-import requests
+from bson import ObjectId
+import bcrypt
+import jwt
+import datetime
 import os
-import time
 
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
-# ---------------------------------
-# Environment variables
-# ---------------------------------
+# -------------------
+# CONFIG
+# -------------------
+MONGO_URI = os.getenv("MONGO_HOST", "mongodb://localhost:27017")
+JWT_SECRET = os.getenv("JWT_SECRET", "secret")
 
-import os
+client = MongoClient(MONGO_URI)
+db = client["hospital"]
 
-MONGO_URI = os.getenv("MONGO_HOST")
+# -------------------
+# JWT
+# -------------------
+def create_token(user):
+    token = jwt.encode({
+        "user_id": str(user["_id"]),
+        "username": user["username"],
+        "role": user["role"],
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+    }, JWT_SECRET, algorithm="HS256")
 
-KEYCLOAK_URI = os.getenv("KEYCLOAK_HOST")
-KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM")
-KEYCLOAK_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID")
-KEYCLOAK_CLIENT_SECRET = os.getenv("KEYCLOAK_CLIENT_SECRET")
+    if isinstance(token, bytes):
+        token = token.decode("utf-8")
 
-# ---------------------------------
-# MongoDB Connection
-# ---------------------------------
+    return token
 
-def wait_for_mongo():
-    while True:
-        try:
-            client = MongoClient(MONGO_URI)
-            client.admin.command("ping")
-            print("MongoDB listo")
-            return client
-        except Exception as e:
-            print("Esperando MongoDB...", e)
-            time.sleep(3)
 
-mongo_client = wait_for_mongo()
+def decode_token(token):
+    try:
+        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    except:
+        return None
 
-# ---------------------------------
-# Create DB and Collections
-# ---------------------------------
 
-DB_NAME = "hospital"
+def get_user_optional():
+    auth = request.headers.get("Authorization")
+    if not auth:
+        return None
+    try:
+        token = auth.split(" ")[1]
+        return decode_token(token)
+    except:
+        return None
 
-def init_database():
-    db = mongo_client[DB_NAME]
 
-    existing_collections = db.list_collection_names()
+def get_user_required():
+    return get_user_optional()
 
-    required_collections = [
-        "users",
-        "doctors",
-        "schedules",
-        "pdfs"
-    ]
 
-    for collection in required_collections:
-        if collection not in existing_collections:
-            db.create_collection(collection)
-            print(f"Collection '{collection}' creada")
-        else:
-            print(f"Collection '{collection}' ya existe")
-
-    return db
-
-db = init_database()
-
-# ---------------------------------
-# USER ROUTES
-# ---------------------------------
-
-@app.route("/user", methods=["POST"])
-def add_user():
+# -------------------
+# REGISTER
+# -------------------
+@app.route("/register", methods=["POST"])
+def register():
     data = request.json
 
-    db.users.insert_one(data)
+    if db.users.find_one({"username": data["username"]}):
+        return jsonify({"error": "exists"}), 400
 
-    return jsonify({
-        "message": "User created"
-    }), 201
-
-
-@app.route("/user/<user_id>", methods=["GET"])
-def get_user(user_id):
-
-    user = db.users.find_one(
-        {"user_id": user_id},
-        {"_id": 0}
+    hashed = bcrypt.hashpw(
+        data["password"].encode(),
+        bcrypt.gensalt()
     )
 
-    if not user:
-        return jsonify({
-            "error": "User not found"
-        }), 404
+    user = {
+        "username":       data["username"],
+        "password":       hashed,
+        "role":           data.get("role", "patient"),
+        "name":           data.get("name", ""),
+        "last_name":      data.get("last_name", ""),
+        "identification": data.get("identification", ""),
+        "email":          data.get("email", ""),
+        "blood_type":     data.get("blood_type", ""),
+        "rh":             data.get("rh", ""),
+        "phone":          data.get("phone", ""),
+        "height":         data.get("height", ""),
+    }
 
-    return jsonify(user), 200
+    result = db.users.insert_one(user)
+    user["_id"] = result.inserted_id
 
-
-@app.route("/user/<user_id>", methods=["PUT"])
-def update_user(user_id):
-
-    data = request.json
-
-    db.users.update_one(
-        {"user_id": user_id},
-        {"$set": data}
-    )
+    token = create_token(user)
 
     return jsonify({
-        "message": "User updated"
-    }), 200
-
-
-@app.route("/user/<user_id>", methods=["DELETE"])
-def delete_user(user_id):
-
-    db.users.delete_one({
-        "user_id": user_id
+        "access_token": token,
+        "role": user["role"]
     })
 
-    return jsonify({
-        "message": "User deleted"
-    }), 200
-
-
-# ---------------------------------
-# DOCTOR ROUTES
-# ---------------------------------
-
-@app.route("/doctor", methods=["POST"])
-def add_doctor():
-
-    data = request.json
-
-    db.doctors.insert_one(data)
-
-    return jsonify({
-        "message": "Doctor created"
-    }), 201
-
-
-@app.route("/doctor/<doctor_id>", methods=["GET"])
-def get_doctor(doctor_id):
-
-    doctor = db.doctors.find_one(
-        {"doctor_id": doctor_id},
-        {"_id": 0}
-    )
-
-    if not doctor:
-        return jsonify({
-            "error": "Doctor not found"
-        }), 404
-
-    return jsonify(doctor), 200
-
-
-# ---------------------------------
-# SCHEDULE ROUTES
-# ---------------------------------
-
-@app.route("/schedule/<doctor_id>", methods=["POST"])
-def add_schedule(doctor_id):
-
-    data = request.json
-    data["doctor_id"] = doctor_id
-
-    db.schedules.insert_one(data)
-
-    return jsonify({
-        "message": "Schedule added"
-    }), 201
-
-
-@app.route("/schedule/<doctor_id>", methods=["GET"])
-def get_schedule(doctor_id):
-
-    schedules = list(
-        db.schedules.find(
-            {"doctor_id": doctor_id},
-            {"_id": 0}
-        )
-    )
-
-    return jsonify(schedules), 200
-
-
-# ---------------------------------
-# PDF ROUTES
-# ---------------------------------
-
-@app.route("/upload", methods=["POST"])
-def add_pdf():
-
-    file = request.files["file"]
-
-    os.makedirs("./uploads", exist_ok=True)
-
-    upload_path = f"./uploads/{file.filename}"
-
-    file.save(upload_path)
-
-    db.pdfs.insert_one({
-        "filename": file.filename,
-        "path": upload_path
-    })
-
-    return jsonify({
-        "message": "PDF uploaded",
-        "path": upload_path
-    }), 201
-
-
-# ---------------------------------
-# KEYCLOAK
-# ---------------------------------
-def wait_for_keycloak():
-
-    while True:
-        try:
-            response = requests.get(
-                f"{KEYCLOAK_URI}/realms/master",
-                timeout=5
-            )
-
-            if response.status_code == 200:
-                print("Keycloak listo")
-                return
-
-        except Exception as e:
-            print("Esperando Keycloak...", e)
-
-        time.sleep(3)
-
-wait_for_keycloak()
-
-keycloak_openid = KeycloakOpenID(
-    server_url=KEYCLOAK_URI,
-    client_id=KEYCLOAK_CLIENT_ID,
-    realm_name=KEYCLOAK_REALM,
-    client_secret_key=KEYCLOAK_CLIENT_SECRET
-)
-
-
+# -------------------
+# LOGIN
+# -------------------
 @app.route("/login", methods=["POST"])
 def login():
+    data = request.json
+
+    user = db.users.find_one({"username": data["username"]})
+
+    if not user:
+        return jsonify({"error": "not found"}), 404
+
+    if not bcrypt.checkpw(data["password"].encode(), user["password"]):
+        return jsonify({"error": "wrong password"}), 401
+
+    token = create_token(user)
+
+    return jsonify({
+        "access_token": token,
+        "role": user["role"]
+    })
+
+
+# -------------------
+# PROFILE (OPTIONAL AUTH)
+# -------------------
+@app.route("/profile", methods=["GET"])
+def profile():
+    user = get_user_optional()
+
+    if not user:
+        return jsonify({"message": "no session"})
+
+    db_user = db.users.find_one(
+        {"_id": ObjectId(user["user_id"])},
+        {"password": 0}
+    )
+
+    if not db_user:
+        return jsonify({"error": "not found"}), 404
+
+    db_user["_id"] = str(db_user["_id"])
+    return jsonify(db_user)
+
+
+# -------------------
+# DOCTORS (FROM USERS)
+# -------------------
+@app.route("/doctors", methods=["GET"])
+def get_doctors():
+    doctors = list(db.users.find(
+        {"role": "doctor"},
+        {"password": 0}
+    ))
+
+    for d in doctors:
+        d["_id"] = str(d["_id"])
+
+    return jsonify(doctors)
+
+
+# -------------------
+# SCHEDULES
+# -------------------
+@app.route("/schedule/<doctor_id>", methods=["GET"])
+def get_schedules(doctor_id):
+    data = list(db.schedules.find({
+        "doctor_id": doctor_id,
+        "available": True
+    }))
+
+    for s in data:
+        s["_id"] = str(s["_id"])
+
+    return jsonify(data)
+
+
+@app.route("/schedule/<doctor_id>", methods=["POST"])
+def create_schedule(doctor_id):
+    data = request.json
+
+    doctor = db.users.find_one({
+        "_id": ObjectId(doctor_id),
+        "role": "doctor"
+    })
+
+    if not doctor:
+        return jsonify({"error": "doctor not found"}), 404
+
+    db.schedules.insert_one({
+        "doctor_id": doctor_id,
+        "date": data["date"],
+        "time": data["time"],
+        "available": True
+    })
+
+    return jsonify({"message": "created"})
+
+
+# -------------------
+# APPOINTMENTS
+# -------------------
+@app.route("/appointments", methods=["GET"])
+def get_appointments():
+    user = get_user_optional()
+
+    data = list(db.appointments.find())
+
+    for d in data:
+        d["_id"] = str(d["_id"])
+
+    return jsonify(data)
+
+
+@app.route("/appointments", methods=["POST"])
+def create_appointment():
+    user = get_user_optional()
 
     data = request.json
 
-    token = keycloak_openid.token(
-        data["username"],
-        data["password"]
+    schedule = db.schedules.find_one({
+        "_id": ObjectId(data["schedule_id"])
+    })
+
+    if not schedule or not schedule.get("available"):
+        return jsonify({"error": "not available"}), 400
+
+    db.appointments.insert_one({
+        "doctor_id": schedule["doctor_id"],
+        "patient": data.get("patient", "anonymous"),
+        "schedule_id": data["schedule_id"],
+        "date": schedule["date"],
+        "time": schedule["time"]
+    })
+
+    db.schedules.update_one(
+        {"_id": ObjectId(data["schedule_id"])},
+        {"$set": {"available": False}}
     )
 
-    return jsonify(token), 200
+    return jsonify({"message": "created"})
 
 
-# ---------------------------------
+@app.route("/appointment/<id>", methods=["DELETE", "OPTIONS"])
+def delete_appointment(id):
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+    db.appointments.delete_one({"_id": ObjectId(id)})
+    return jsonify({"message": "deleted"})
+
+# Historial médico - crear
+@app.route("/history", methods=["POST"])
+def create_history():
+    data = request.json
+    db.history.insert_one({
+        "patient_id": data["patient_id"],
+        "doctor_id":  data["doctor_id"],
+        "diagnosis":  data["diagnosis"],
+        "treatment":  data["treatment"],
+        "notes":      data.get("notes", ""),
+        "date":       data.get("date", "")
+    })
+    return jsonify({"message": "created"})
+
+# Historial médico - obtener por paciente
+@app.route("/history/<patient_id>", methods=["GET"])
+def get_history(patient_id):
+    records = list(db.history.find({"patient_id": patient_id}))
+    for r in records:
+        r["_id"] = str(r["_id"])
+    return jsonify(records)
+
+@app.route("/history/<patient_id>", methods=["GET"])
+def get_history(patient_id):
+    records = list(db.history.find({"patient_id": patient_id}))
+    for r in records:
+        r["_id"] = str(r["_id"])
+    return jsonify(records)
+
+# Completar/terminar una cita
+@app.route("/appointment/<id>/complete", methods=["POST", "OPTIONS"])
+def complete_appointment(id):
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+    db.appointments.update_one(
+        {"_id": ObjectId(id)},
+        {"$set": {"status": "completed"}}
+    )
+    return jsonify({"message": "completed"})
+# -------------------
 # MAIN
-# ---------------------------------
-
+# -------------------
 if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",
-        port=5000,
-        debug=True
-    )
+    app.run(debug=True, port=5000)

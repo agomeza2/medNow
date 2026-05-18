@@ -1,52 +1,74 @@
 services:
+
+  # ---------------------------------
+  # MONGODB
+  # ---------------------------------
+
   mongo:
+
     image: mongo:7
+
+    container_name: mongo
+
+    restart: always
+
     ports:
       - "27017:27017"
+
     volumes:
       - mongo_data:/data/db
-  postgres:
-    image: postgres:16
-    env_file:
-      - .env 
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - keycloak_data:/var/lib/postgresql/data
-  keycloak:
-    image: quay.io/keycloak/keycloak:25.0.0
-    command: start-dev
-    env_file:
-      - .env
-    environment:
-      KC_DB: postgres
-      KC_DB_URL_HOST: postgres
-      KC_DB_URL_DATABASE: ${POSTGRES_DB}
-      KC_DB_USERNAME: ${POSTGRES_USER}
-      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
 
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+    networks:
+      - medical_network
 
-    ports:
-      - "8080:8080"
 
-    depends_on:
-      - postgres
+  # ---------------------------------
+  # API FLASK
+  # ---------------------------------
+
   api:
+
     build: ./api
+
+    container_name: medical_api
+
+    restart: always
+
     ports:
       - "5000:5000"
+
     env_file:
       - ./api/.env
+
+    environment:
+
+      MONGO_HOST: mongodb://mongo:27017
+
+      JWT_SECRET: super_secret_jwt_key
+
     volumes:
       - ./uploads:/app/uploads
+
     depends_on:
       - mongo
-      - keycloak
+
+    networks:
+      - medical_network
+
+
+# ---------------------------------
+# VOLUMES
+# ---------------------------------
 
 volumes:
+
   mongo_data:
-  keycloak_data:
+
+
+# ---------------------------------
+# NETWORK
+# ---------------------------------
+
+networks:
+
+  medical_network:

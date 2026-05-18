@@ -1,145 +1,187 @@
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
+  Alert,
+  Text,
   StyleSheet,
-  SafeAreaView
+  ActivityIndicator
 } from 'react-native';
 
-import { router } from 'expo-router';
+import { useState } from 'react';
+import { useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { login } from '../scripts/login';
 
 export default function LoginScreen() {
+  const router = useRouter();
 
-  const goDashboard = () => {
-    router.replace('/dashboard');
-  };
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function handleLogin() {
+    if (!username.trim() || !password.trim()) {
+      Alert.alert('Error', 'Completa todos los campos');
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const result = await login(username, password);
+
+      console.log('LOGIN:', result);
+
+      // Guardar token
+      if (result?.token) {
+        await AsyncStorage.setItem('token', result.token);
+      } else {
+        throw new Error('Token no recibido del backend');
+      }
+
+      Alert.alert('Bienvenido');
+
+      // 🔥 NAVIGACIÓN SEGURA POR ROLE
+      const role = result?.role;
+
+      if (role === 'patient') {
+        router.replace('/dashboard');
+      } else if (role === 'doctor') {
+        router.replace('/doctor_dashboard');
+      } else if (role === 'admin') {
+        router.replace('/admin_panel');
+      } else {
+        Alert.alert('Error', 'Rol inválido');
+      }
+
+    } catch (error) {
+      console.log('LOGIN SCREEN ERROR:', error);
+
+      if (error instanceof Error) {
+        Alert.alert('Error', error.message);
+      } else {
+        Alert.alert('Error', 'Ocurrió un error');
+      }
+
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
+    <View style={styles.container}>
 
-    <SafeAreaView style={styles.container}>
-
-      <View style={styles.card}>
-
-        <Text style={styles.title}>
-          Medical App
-        </Text>
-
-        <Text style={styles.subtitle}>
-          Gestión inteligente de citas médicas
-        </Text>
-
-        <TextInput
-          placeholder="Usuario"
-          placeholderTextColor="#888"
-          style={styles.input}
-        />
-
-        <TextInput
-          placeholder="Contraseña"
-          placeholderTextColor="#888"
-          secureTextEntry
-          style={styles.input}
-        />
-
-        <TouchableOpacity
-          style={styles.loginButton}
-          onPress={goDashboard}
-        >
-          <Text style={styles.buttonText}>
-            Iniciar sesión
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.googleButton}
-          onPress={goDashboard}
-        >
-          <Text style={styles.buttonText}>
-            Continuar con Google SSO
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.testButton}
-          onPress={goDashboard}
-        >
-          <Text style={styles.buttonText}>
-            Entrar al Dashboard (Prueba)
-          </Text>
-        </TouchableOpacity>
-
+      <View style={styles.header}>
+        <Text style={styles.title}>Medical App</Text>
+        <Text style={styles.subtitle}>Inicia sesión para continuar</Text>
       </View>
 
-    </SafeAreaView>
+      <TextInput
+        placeholder="Usuario"
+        placeholderTextColor="#94a3b8"
+        autoCapitalize="none"
+        value={username}
+        onChangeText={setUsername}
+        style={styles.input}
+      />
 
+      <TextInput
+        placeholder="Contraseña"
+        placeholderTextColor="#94a3b8"
+        secureTextEntry
+        value={password}
+        onChangeText={setPassword}
+        style={styles.input}
+      />
+
+      <TouchableOpacity
+        style={styles.loginButton}
+        onPress={handleLogin}
+        disabled={loading}
+      >
+        {loading ? (
+          <ActivityIndicator color="white" />
+        ) : (
+          <Text style={styles.loginText}>Iniciar sesión</Text>
+        )}
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.registerButton}
+        onPress={() => router.push('/register')}
+      >
+        <Text style={styles.registerText}>Crear cuenta</Text>
+      </TouchableOpacity>
+
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-
   container: {
     flex: 1,
-    backgroundColor: '#0f172a',
+    backgroundColor: '#020617',
     justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20
+    padding: 30
   },
 
-  card: {
-    width: '100%',
-    backgroundColor: '#1e293b',
-    padding: 25,
-    borderRadius: 25
+  header: {
+    marginBottom: 45
   },
 
   title: {
     color: 'white',
-    fontSize: 36,
+    fontSize: 42,
     fontWeight: 'bold',
     marginBottom: 10
   },
 
   subtitle: {
-    color: '#cbd5e1',
-    marginBottom: 30,
+    color: '#94a3b8',
     fontSize: 16
   },
 
   input: {
-    backgroundColor: '#334155',
+    backgroundColor: '#0f172a',
+    borderWidth: 1,
+    borderColor: '#1e293b',
     color: 'white',
-    padding: 15,
-    borderRadius: 14,
-    marginBottom: 15,
+    padding: 18,
+    borderRadius: 16,
+    marginBottom: 20,
     fontSize: 16
   },
 
   loginButton: {
     backgroundColor: '#2563eb',
-    padding: 16,
-    borderRadius: 14,
-    marginBottom: 15
+    padding: 18,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+    minHeight: 60
   },
 
-  googleButton: {
-    backgroundColor: '#dc2626',
-    padding: 16,
-    borderRadius: 14,
-    marginBottom: 15
-  },
-
-  testButton: {
-    backgroundColor: '#059669',
-    padding: 16,
-    borderRadius: 14
-  },
-
-  buttonText: {
+  loginText: {
     color: 'white',
-    textAlign: 'center',
+    fontWeight: 'bold',
+    fontSize: 16
+  },
+
+  registerButton: {
+    backgroundColor: '#111827',
+    padding: 18,
+    borderRadius: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#334155'
+  },
+
+  registerText: {
+    color: '#cbd5e1',
     fontWeight: 'bold',
     fontSize: 16
   }
-
 });
