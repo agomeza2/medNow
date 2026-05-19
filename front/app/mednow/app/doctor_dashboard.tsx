@@ -34,6 +34,7 @@ type UserProfile = {
 };
 
 type Appointment = {
+  status: string;
   _id: string;
   doctor_id: string;
   patient: string;
@@ -71,27 +72,42 @@ async function authFetch(url: string, token: string, options: any = {}) {
 // ----------------------
 // API CALLS
 // ----------------------
-async function getProfile(token: string): Promise<UserProfile> {
+async function doctorGetProfile(token: string): Promise<UserProfile> {
   const data = await authFetch(`${API}/profile`, token);
   return data.user ?? data;
 }
 
-async function getMyAppointments(token: string, doctorId: string): Promise<Appointment[]> {
+async function doctorGetAppointments(token: string, doctorId: string): Promise<Appointment[]> {
   const all = await authFetch(`${API}/appointments`, token);
-  return all.filter((a: Appointment) => a.doctor_id === doctorId);
+  return all.filter((a: Appointment) => a.doctor_id === doctorId && a.status !== 'completed');
 }
 
-async function createSchedule(token: string, doctorId: string, date: string, time: string) {
+async function doctorCreateSchedule(token: string, doctorId: string, date: string, time: string) {
   return await authFetch(`${API}/schedule/${doctorId}`, token, {
     method: 'POST',
     body: JSON.stringify({ date, time }),
   });
 }
 
-async function createHistory(token: string, payload: Omit<MedicalHistory, '_id'>) {
+async function doctorCreateHistory(token: string, payload: Omit<MedicalHistory, '_id'>) {
   return await authFetch(`${API}/history`, token, {
     method: 'POST',
     body: JSON.stringify(payload),
+  });
+}
+
+async function doctorGetHistory(token: string, patientId: string): Promise<MedicalHistory[]> {
+  return await authFetch(`${API}/history/${patientId}`, token);
+}
+
+async function doctorFinishAppointment(token: string, id: string) {
+  return await authFetch(`${API}/appointment/${id}`, token, {
+    method: 'DELETE',
+  });
+}
+async function deleteAppointment(token: string, id: string) {
+  return await authFetch(`${API}/appointment/${id}`, token, {
+    method: 'DELETE',
   });
 }
 
@@ -118,11 +134,19 @@ export default function DoctorDashboard() {
   const [loadingAppts, setLoadingAppts] = useState(false);
   const [selectedAppt, setSelectedAppt] = useState<Appointment | null>(null);
 
-  // Historial médico
+  // Historial médico — form
   const [histDiagnosis, setHistDiagnosis] = useState('');
   const [histTreatment, setHistTreatment] = useState('');
   const [histNotes, setHistNotes] = useState('');
   const [loadingHist, setLoadingHist] = useState(false);
+
+  // Historial médico — ver registros del paciente
+  const [patientHistory, setPatientHistory] = useState<MedicalHistory[]>([]);
+  const [showPatientHistory, setShowPatientHistory] = useState(false);
+  const [loadingPatientHistory, setLoadingPatientHistory] = useState(false);
+
+  // Terminar cita
+  const [finishingAppt, setFinishingAppt] = useState(false);
 
   useEffect(() => { init(); }, []);
 
@@ -131,7 +155,7 @@ export default function DoctorDashboard() {
       const t = await AsyncStorage.getItem('token');
       if (!t) { Alert.alert('Error', 'No hay token guardado'); return; }
       setToken(t);
-      const p = await getProfile(t);
+      const p = await doctorGetProfile(t);
       setProfile(p);
     } catch (err: any) {
       Alert.alert('Error', err.message);
@@ -152,7 +176,7 @@ export default function DoctorDashboard() {
       setSelectedAppt(null);
       setLoadingAppts(true);
       try {
-        const a = await getMyAppointments(token, profile._id);
+        const a = await doctorGetAppointments(token, profile._id);
         setAppointments(a);
       } catch (err: any) {
         Alert.alert('Error', err.message);
@@ -189,7 +213,7 @@ export default function DoctorDashboard() {
     try {
       await Promise.all(
         selectedSlots.map((slot) =>
-          createSchedule(token, profile!._id, selectedDate, slot)
+          doctorCreateSchedule(token, profile!._id, selectedDate, slot)
         )
       );
       Alert.alert(
@@ -216,7 +240,7 @@ export default function DoctorDashboard() {
     }
     setLoadingHist(true);
     try {
-      await createHistory(token, {
+      await doctorCreateHistory(token, {
         patient_id: selectedAppt.patient,
         doctor_id: profile!._id,
         diagnosis: histDiagnosis.trim(),
@@ -229,11 +253,75 @@ export default function DoctorDashboard() {
       setHistTreatment('');
       setHistNotes('');
       setSelectedAppt(null);
+      setPatientHistory([]);
+      setShowPatientHistory(false);
     } catch (err: any) {
       Alert.alert('Error', err.message);
     } finally {
       setLoadingHist(false);
     }
+  }
+
+  // ── Ver historial del paciente ────────────────────────────
+  async function handleTogglePatientHistory() {
+    if (showPatientHistory) {
+      setShowPatientHistory(false);
+      return;
+    }
+    if (!selectedAppt) {
+      Alert.alert('Error', 'Selecciona una cita primero');
+      return;
+    }
+    setLoadingPatientHistory(true);
+    try {
+      const h = await doctorGetHistory(token, selectedAppt.patient);
+      setPatientHistory(h);
+      setShowPatientHistory(true);
+    } catch (err: any) {
+      Alert.alert('Error', err.message);
+    } finally {
+      setLoadingPatientHistory(false);
+    }
+  }
+
+  // ── Terminar cita ─────────────────────────────────────────
+  async function handleFinishAppointment() {
+    if (!selectedAppt) {
+      Alert.alert('Error', 'No hay cita seleccionada');
+      return;
+    }
+    const apptToFinish = selectedAppt; // capturar antes del Alert
+    Alert.alert(
+      'Terminar cita',
+      `¿Confirmas que la cita con ${apptToFinish.patient} ha finalizado?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Terminar',
+          style: 'destructive',
+          onPress: async () => {
+            setFinishingAppt(true);
+            try {
+              console.log('Terminando cita:', apptToFinish._id);
+              await doctorFinishAppointment(token, apptToFinish._id);
+              console.log('Cita terminada OK');
+              setSelectedAppt(null);
+              setPatientHistory([]);
+              setShowPatientHistory(false);
+              const a = await doctorGetAppointments(token, profile!._id);
+              setAppointments(a);
+              setActiveView('appointments');
+              Alert.alert('✅ Cita finalizada', `Paciente: ${apptToFinish.patient}`);
+            } catch (err: any) {
+              console.log('Error terminando cita:', err.message);
+              Alert.alert('Error', err.message);
+            } finally {
+              setFinishingAppt(false);
+            }
+          },
+        },
+      ]
+    );
   }
 
   const doctorName = profile
@@ -375,18 +463,7 @@ export default function DoctorDashboard() {
               : appointments.length === 0
                 ? <Text style={styles.empty}>No tienes citas agendadas</Text>
                 : appointments.map((appt) => (
-                  <TouchableOpacity
-                    key={appt._id}
-                    style={[
-                      styles.apptCard,
-                      selectedAppt?._id === appt._id && styles.apptCardSelected,
-                    ]}
-                    onPress={() => {
-                      setSelectedAppt(appt);
-                      handleNav('history');
-                    }}
-                    activeOpacity={0.8}
-                  >
+                  <View key={appt._id} style={styles.apptCard}>
                     <View style={styles.rowBetween}>
                       <View>
                         <Text style={styles.patientName}>👤 {appt.patient}</Text>
@@ -394,9 +471,36 @@ export default function DoctorDashboard() {
                           📅 {appt.date ?? 'sin fecha'}  🕐 {appt.time ?? 'sin hora'}
                         </Text>
                       </View>
-                      <Text style={styles.arrowHint}>Ver historial →</Text>
+                      <TouchableOpacity
+                        onPress={() => {
+                          setSelectedAppt(appt);
+                          handleNav('history');
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.arrowHint}>Ver historial →</Text>
+                      </TouchableOpacity>
                     </View>
-                  </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.finishBtnInline}
+                      onPress={async () => {
+                        const apptToFinish = appt;
+                        try {
+                                  await doctorFinishAppointment(token, apptToFinish._id);
+                                  const a = await doctorGetAppointments(token, profile!._id);
+                                  setAppointments(a);
+                                  //Alert.alert('Cita finalizada', `Paciente: ${apptToFinish.patient}`);
+                                } catch (err: any) {
+                                  Alert.alert('Error', err.message);
+                                } finally {
+                                  setFinishingAppt(false);
+                                }
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.finishBtnInlineText}>✅ Terminar cita</Text>
+                    </TouchableOpacity>
+                  </View>
                 ))
             }
           </View>
@@ -469,6 +573,52 @@ export default function DoctorDashboard() {
                 }
               </TouchableOpacity>
             </View>
+
+            {/* Ver historial previo del paciente */}
+            {selectedAppt && (
+              <View style={{ marginTop: 20 }}>
+                <TouchableOpacity
+                  style={styles.secondaryBtn}
+                  onPress={handleTogglePatientHistory}
+                  disabled={loadingPatientHistory}
+                  activeOpacity={0.8}
+                >
+                  {loadingPatientHistory
+                    ? <ActivityIndicator color="#38bdf8" />
+                    : <Text style={styles.secondaryBtnText}>
+                        {showPatientHistory ? '▲  Ocultar historial previo' : '📂  Ver historial previo del paciente'}
+                      </Text>
+                  }
+                </TouchableOpacity>
+
+                {showPatientHistory && (
+                  <View style={{ marginTop: 10 }}>
+                    {patientHistory.length === 0
+                      ? <Text style={styles.empty}>Sin registros previos</Text>
+                      : patientHistory.map((record) => (
+                        <View key={record._id} style={styles.historyCard}>
+                          <Text style={styles.historyDate}>📅 {record.date ?? 'sin fecha'}</Text>
+                          <View style={styles.historyRow}>
+                            <Text style={styles.historyLabel}>Diagnóstico</Text>
+                            <Text style={styles.historyValue}>{record.diagnosis}</Text>
+                          </View>
+                          <View style={styles.historyRow}>
+                            <Text style={styles.historyLabel}>Tratamiento</Text>
+                            <Text style={styles.historyValue}>{record.treatment}</Text>
+                          </View>
+                          {record.notes ? (
+                            <View style={styles.historyRow}>
+                              <Text style={styles.historyLabel}>Notas</Text>
+                              <Text style={styles.historyValue}>{record.notes}</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      ))
+                    }
+                  </View>
+                )}
+              </View>
+            )}
           </View>
         )}
 
@@ -736,5 +886,78 @@ const styles = StyleSheet.create({
     color: '#fca5a5',
     fontSize: 14,
     fontWeight: '700',
+  },
+
+  // Ver historial previo
+  secondaryBtn: {
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'center',
+  },
+  secondaryBtnText: {
+    color: '#38bdf8',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+
+  // Historial cards
+  historyCard: {
+    backgroundColor: '#1e293b',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#6366f1',
+  },
+  historyDate: {
+    color: '#6366f1',
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  historyRow: {
+    marginBottom: 6,
+  },
+  historyLabel: {
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  historyValue: {
+    color: '#e2e8f0',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+
+  // Terminar cita
+  finishBtn: {
+    backgroundColor: '#7f1d1d',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  finishBtnText: {
+    color: '#fca5a5',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  finishBtnInline: {
+    marginTop: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#7f1d1d',
+    borderRadius: 8,
+    alignSelf: 'flex-end',
+  },
+  finishBtnInlineText: {
+    color: '#fca5a5',
+    fontWeight: '700',
+    fontSize: 13,
   },
 });

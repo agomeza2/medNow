@@ -54,6 +54,17 @@ type Appointment = {
   date?: string;
   time?: string;
   patient?: string;
+  status?: string;
+};
+
+type MedicalHistory = {
+  _id: string;
+  patient_id: string;
+  doctor_id: string;
+  diagnosis: string;
+  treatment: string;
+  notes?: string;
+  date?: string;
 };
 
 // ----------------------
@@ -78,6 +89,10 @@ async function authFetch(url: string, token: string, options: any = {}) {
   return data;
 }
 
+async function getHistory(token: string, patientId: string): Promise<MedicalHistory[]> {
+  return await authFetch(`${API}/history/${patientId}`, token);
+}
+
 // ----------------------
 // API CALLS
 // ----------------------
@@ -93,7 +108,8 @@ async function getDoctors(token: string): Promise<Doctor[]> {
 }
 
 async function getAppointments(token: string): Promise<Appointment[]> {
-  return await authFetch(`${API}/appointments`, token);
+  const all = await authFetch(`${API}/appointments`, token);
+  return all.filter((a: Appointment) => a.status !== 'completed');
 }
 
 async function deleteAppointment(token: string, id: string) {
@@ -111,6 +127,10 @@ async function bookAppointment(token: string, scheduleId: string, patient: strin
     method: 'POST',
     body: JSON.stringify({ schedule_id: scheduleId, patient }),
   });
+}
+
+async function getHistory1(token: string, patientId: string): Promise<MedicalHistory[]> {
+  return await authFetch(`${API}/history/${patientId}`, token);
 }
 
 // ----------------------
@@ -140,6 +160,11 @@ export default function Dashboard() {
   const [loadingSchedules, setLoadingSchedules] = useState(false);
   const [loadingBook, setLoadingBook] = useState<string | null>(null);
 
+  // Historial médico
+  const [history, setHistory] = useState<MedicalHistory[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
   useEffect(() => {
     initToken();
   }, []);
@@ -164,6 +189,25 @@ export default function Dashboard() {
   async function handleLogout() {
     await AsyncStorage.removeItem('token');
     router.replace('/');
+  }
+
+  // ── Historial médico ──────────────────────────────────────
+  async function handleToggleHistory() {
+    if (showHistory) {
+      setShowHistory(false);
+      return;
+    }
+    if (!profile) return;
+    setLoadingHistory(true);
+    try {
+      const h = await getHistory(token, profile.username);
+      setHistory(h);
+      setShowHistory(true);
+    } catch (err: any) {
+      Alert.alert('Error', err.message);
+    } finally {
+      setLoadingHistory(false);
+    }
   }
 
   // ── Perfil ────────────────────────────────────────────────
@@ -281,6 +325,28 @@ export default function Dashboard() {
       setAppointments(a);
     } catch (err: any) {
       Alert.alert('Error', err.message);
+    }
+  }
+
+  // ── Historial médico ──────────────────────────────────────
+  async function handleToggleHistory1() {
+    if (showHistory) {
+      setShowHistory(false);
+      return;
+    }
+    if (!profile) {
+      Alert.alert('Error', 'Carga tu perfil primero');
+      return;
+    }
+    setLoadingHistory(true);
+    try {
+      const h = await getHistory(token, profile.username);
+      setHistory(h);
+      setShowHistory(true);
+    } catch (err: any) {
+      Alert.alert('Error', err.message);
+    } finally {
+      setLoadingHistory(false);
     }
   }
 
@@ -429,6 +495,42 @@ export default function Dashboard() {
                 <TouchableOpacity onPress={() => handleDelete(appt._id)}>
                   <Text style={styles.delete}>Eliminar</Text>
                 </TouchableOpacity>
+              </View>
+            ))
+          }
+        </View>
+      )}
+
+      {/* ── HISTORIAL MÉDICO ── */}
+      <TouchableOpacity style={styles.sectionBtn} onPress={handleToggleHistory} activeOpacity={0.8}>
+        <Text style={styles.sectionBtnText}>🏥  Mi historial médico</Text>
+        {loadingHistory
+          ? <ActivityIndicator color="#38bdf8" />
+          : <Text style={styles.chevron}>{showHistory ? '▲' : '▼'}</Text>
+        }
+      </TouchableOpacity>
+
+      {showHistory && (
+        <View>
+          {history.length === 0
+            ? <Text style={styles.empty}>No tienes registros médicos aún</Text>
+            : history.map((record) => (
+              <View key={record._id} style={styles.historyCard}>
+                <Text style={styles.historyDate}>📅 {record.date ?? 'sin fecha'}</Text>
+                <View style={styles.historyRow}>
+                  <Text style={styles.historyLabel}>Diagnóstico</Text>
+                  <Text style={styles.historyValue}>{record.diagnosis}</Text>
+                </View>
+                <View style={styles.historyRow}>
+                  <Text style={styles.historyLabel}>Tratamiento</Text>
+                  <Text style={styles.historyValue}>{record.treatment}</Text>
+                </View>
+                {record.notes ? (
+                  <View style={styles.historyRow}>
+                    <Text style={styles.historyLabel}>Notas</Text>
+                    <Text style={styles.historyValue}>{record.notes}</Text>
+                  </View>
+                ) : null}
               </View>
             ))
           }
@@ -626,5 +728,37 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingVertical: 12,
     fontSize: 13,
+  },
+
+  // Historial médico
+  historyCard: {
+    backgroundColor: '#1e293b',
+    borderRadius: 10,
+    padding: 14,
+    marginTop: 6,
+    borderLeftWidth: 3,
+    borderLeftColor: '#6366f1',
+  },
+  historyDate: {
+    color: '#6366f1',
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  historyRow: {
+    marginBottom: 6,
+  },
+  historyLabel: {
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  historyValue: {
+    color: '#e2e8f0',
+    fontSize: 14,
+    lineHeight: 20,
   },
 });
