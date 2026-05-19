@@ -269,13 +269,6 @@ def get_history(patient_id):
         r["_id"] = str(r["_id"])
     return jsonify(records)
 
-@app.route("/history/<patient_id>", methods=["GET"])
-def get_history(patient_id):
-    records = list(db.history.find({"patient_id": patient_id}))
-    for r in records:
-        r["_id"] = str(r["_id"])
-    return jsonify(records)
-
 # Completar/terminar una cita
 @app.route("/appointment/<id>/complete", methods=["POST", "OPTIONS"])
 def complete_appointment(id):
