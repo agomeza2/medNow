@@ -97,6 +97,11 @@ def register():
         "role": user["role"]
     })
 
+@app.route("/users", methods=["GET"])
+def get_users():
+    users = list(db.users.find({}, {"password": 0}))
+    for u in users: u["_id"] = str(u["_id"])
+    return jsonify(users)
 # -------------------
 # LOGIN
 # -------------------
